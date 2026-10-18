@@ -52,6 +52,7 @@ export function createSim(world) {
     sailT: 0,
     sharkT: 0,
     patches: [false, false],
+    sparePlanks: 0,
     patchHold: 0,
     patchIndex: 0,
     holdE: false,
@@ -610,6 +611,10 @@ export function createSim(world) {
           if (idx >= 0) {
             this.patches[idx] = true;
             audio.sfx("build");
+            // one spare log per hole; the deck crate covers a shortfall so the
+            // stage can never dead-end
+            if (this.inv.log > 0) this.inv.log -= 1;
+            else this.sparePlanks = (this.sparePlanks || 0) + 1;
             const left = this.patches.filter(Boolean).length;
             this.toast = `Lubang ${left}/2 ditambal`;
             if (left >= 2) {
