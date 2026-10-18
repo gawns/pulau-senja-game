@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="id">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#0b1226" />
+    <title>Pulau Senja</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%233f8fbf'/%3E%3Ccircle cx='8' cy='9' r='5' fill='%23e6c27a'/%3E%3C/svg%3E" />
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <div id="app">
+      <canvas id="view"></canvas>
+
+      <div id="hud">
+        <section id="quest" aria-live="polite">
+          <p id="quest-kicker"></p>
+          <p id="quest-title"></p>
+          <p id="quest-detail"></p>
+          <div id="quest-bar" hidden><i></i></div>
+        </section>
+        <p id="clock"></p>
+        <p id="bag"></p>
+        <p id="side"></p>
+        <p id="prompt" hidden></p>
+        <p id="toast" hidden></p>
+        <div id="ach">
+          <p id="ach-count"></p>
+          <div id="ach-list"></div>
+        </div>
+      </div>
+
+      <div id="dialog" hidden>
+        <div id="dialog-head">
+          <span id="dialog-portrait"></span>
+          <div>
+            <p id="dialog-name"></p>
+            <div id="dialog-dots"></div>
+          </div>
+        </div>
+        <p id="dialog-text"></p>
+        <div id="dialog-foot">
+          <span id="dialog-hint">Enter / klik</span>
+          <button id="dialog-next" type="button">Lanjut</button>
+        </div>
+      </div>
+
+      <div id="craft" hidden>
+        <p id="craft-title">Buat</p>
+        <button type="button" data-craft="plank"><b>Papan</b><span>1 kayu → 2 papan</span></button>
+        <button type="button" data-craft="furnace"><b>Tungku</b><span>4 batu + 4 pasir</span></button>
+        <button type="button" data-craft="house"><b>Rumah Tamo</b><span>8 papan</span></button>
+        <button id="craft-close" type="button">Tutup</button>
+      </div>
+
+      <div id="end" hidden>
+        <p id="end-kicker">Tamat</p>
+        <h2>Pulau Senja</h2>
+        <p>Kapal meninggalkan dermaga. Tamo berdiri di dermaga sampai ia jadi titik.</p>
+        <p id="end-stats"></p>
+        <button id="again" type="button">Main lagi</button>
+      </div>
+
+      <div id="menu" hidden>
+        <h1>Jeda</h1>
+        <ul>
+          <li>WASD jalan · mouse lihat</li>
+          <li>E aksi · C buat · T lewati waktu</li>
+          <li>Esc jeda</li>
+        </ul>
+        <button id="start" type="button">Lanjut</button>
+      </div>
+
+      <div id="intro">
+        <div id="intro-card">
+          <p id="intro-kicker"></p>
+          <h1 id="intro-title"></h1>
+          <div id="intro-body"></div>
+          <ul id="intro-keys">
+            <li><b>WASD</b> jalan</li>
+            <li><b>Mouse</b> lihat</li>
+            <li><b>E</b> aksi</li>
+            <li><b>C</b> buat</li>
+            <li><b>T</b> lewati waktu</li>
+          </ul>
+          <button id="intro-go" type="button">Buka mata</button>
+        </div>
+      </div>
+
+      <div id="touch" hidden>
+        <div id="pad">
+          <button type="button" data-key="KeyW" aria-label="Maju">▲</button>
+          <button type="button" data-key="KeyA" aria-label="Kiri">◀</button>
+          <button type="button" data-key="KeyS" aria-label="Mundur">▼</button>
+          <button type="button" data-key="KeyD" aria-label="Kanan">▶</button>
+        </div>
+        <div id="touch-acts">
+          <button type="button" data-act="e">E</button>
+          <button type="button" data-act="c">C</button>
+          <button type="button" data-act="t">T</button>
+        </div>
+      </div>
+    </div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
