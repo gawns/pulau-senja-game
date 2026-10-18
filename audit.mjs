@@ -12,8 +12,8 @@ const browser = await puppeteer.launch({
 });
 const page = await browser.newPage();
 page.on("pageerror", (e) => console.log("PAGEERROR", e.message));
-await page.goto("http://localhost:5173/", { waitUntil: "networkidle0" });
-await page.click("#start");
+await page.goto("http://localhost:5173/?lowfx=1", { waitUntil: "networkidle0" });
+await page.click("#intro-go");
 await new Promise((r) => setTimeout(r, 500));
 
 // --- reachability: BFS on walkable grid from spawn, then check every interactable has a
@@ -22,7 +22,7 @@ const reach = await page.evaluate(() => {
   const s = __senja.sim;
   const W = __senja.world;
   const step = 0.35;
-  const N = 88;
+  const N = 128;
   const off = N / 2;
   const key = (i, j) => i + "," + j;
   const walkable = (i, j) => {
@@ -64,6 +64,7 @@ const reach = await page.evaluate(() => {
   for (const sd of W.sands) test("sand", sd.x, sd.z, 1.7);
   for (const sh of W.shells) test("shell", sh.x, sh.z, 1.7);
   test("boat", W.boat.x, W.boat.z, 2.4);
+  for (const c of W.cats) test("cat:" + c.id, c.x, c.z, 2.2);
   return out;
 });
 console.log("reachable cells:", reach.reachableCells, "| ok:", reach.ok, "| fails:", reach.fails.length);
