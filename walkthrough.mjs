@@ -192,6 +192,9 @@ async function chopTree(t) {
     if (!spot) continue;
     await pathTo(spot.x, spot.z);
     await sleep(120);
+    // a player turns to face the trunk before pressing E
+    await page.evaluate((x, z) => { __senja.sim.yaw = Math.atan2(x - __senja.sim.x, z - __senja.sim.z); }, t.x, t.z);
+    await sleep(120);
     const label = await page.evaluate(() => document.getElementById("prompt").textContent || "");
     if (/tebang/i.test(label)) { ok = true; break; }
   }
@@ -265,12 +268,20 @@ check("10 logs, quest -> house", s.inv.log === 10 && s.quest === "house", JSON.s
 check("achievement 'wood'", s.ach.includes("wood"), s.ach.join(","));
 
 // ---- 3. pet a cat (outdoors, before the house stands)
-for (let attempt = 0; attempt < 8; attempt++) {
-  // pick the cat furthest from the house porch, so the bed prompt can't compete
+for (let attempt = 0; attempt < 10; attempt++) {
+  // pick the cat furthest from the house AND from every NPC, so neither the
+  // bed prompt nor "bicara Tamo" can outrank the cat
   const cat = await page.evaluate(() => {
     const h = __senja.world.housePos;
+    const npcs = __senja.world.npcs;
     const list = __senja.world.cats
-      .map((c) => ({ x: c.x, z: c.z, d: Math.hypot(c.x - h.x, c.z - h.z) }))
+      .map((c) => ({
+        x: c.x, z: c.z,
+        d: Math.min(
+          Math.hypot(c.x - h.x, c.z - h.z),
+          ...npcs.map((n) => Math.hypot(c.x - n.x, c.z - n.z))
+        ),
+      }))
       .sort((a, b) => b.d - a.d);
     return list[0];
   });
@@ -282,7 +293,19 @@ for (let attempt = 0; attempt < 8; attempt++) {
     x: +__senja.sim.x.toFixed(2),
     z: +__senja.sim.z.toFixed(2),
   }));
-  const label = info.label;
+  let label = info.label;
+  if (!/usap/i.test(label)) {
+    // cats wander: re-read the live position, then face it and re-check
+    await page.evaluate(() => {
+      const s = __senja.sim;
+      const c = __senja.world.cats
+        .map((c) => ({ c, d: Math.hypot(c.x - s.x, c.z - s.z) }))
+        .sort((a, b) => a.d - b.d)[0].c;
+      s.yaw = Math.atan2(c.x - s.x, c.z - s.z);
+    });
+    await sleep(150);
+    label = await page.evaluate(() => document.getElementById("prompt").textContent || "");
+  }
   if (!/usap/i.test(label)) {
     console.log(`    cat attempt ${attempt}: path=${okPath} at ${info.x},${info.z} target ${cat.x.toFixed(2)},${cat.z.toFixed(2)} label="${label}"`);
     continue;

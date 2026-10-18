@@ -142,18 +142,30 @@ export function createSim(world) {
         return null;
       }
       const cands = [];
-      const push = (kind, list, reach, ok, label, bias = 0) => {
+      // Score = distance, minus a bonus when the player is facing the target.
+      // That way the thing you look at wins ties instead of whatever happens
+      // to be marginally closer (a cat sitting next to the tree you want).
+      const push = (kind, list, reach, ok, label, bias = 0, faceBonus = 0.55) => {
         const it = this.nearest(list, reach, ok);
         if (!it) return;
-        const d = Math.hypot(it.x - this.x, it.z - this.z) + bias;
+        const dx = it.x - this.x;
+        const dz = it.z - this.z;
+        const dist = Math.hypot(dx, dz);
+        let d = dist + bias;
+        if (faceBonus) {
+          const fx = Math.sin(this.yaw);
+          const fz = Math.cos(this.yaw);
+          const dot = dist > 0.001 ? (dx / dist) * fx + (dz / dist) * fz : 1;
+          if (dot > 0.35) d -= faceBonus * Math.min(1, (dot - 0.35) / 0.65);
+        }
         cands.push({ kind, ref: it, d, label: typeof label === "function" ? label(it) : label });
       };
       push("npc", world.npcs, TALK, null, (n) => `E  bicara ${n.name}`, -1.4);
-      push("cat", world.cats, 1.6, null, (c) => `E  usap ${c.name}`, 0.7);
+      push("cat", world.cats, 1.5, null, (c) => `E  usap ${c.name}`);
       if (this.quest === "boat" || this.quest === "sail") {
         push("boat", [world.boat], 2.8, null, this.quest === "boat" ? "E  temui Tamo" : "E  berlayar");
       }
-      push("tree", world.trees, REACH, (t) => !t.felled, () => (this.axe ? "E  tebang pohon" : "Butuh kapak dari Tamo"), -0.8);
+      push("tree", world.trees, REACH, (t) => !t.felled, () => (this.axe ? "E  tebang pohon" : "Butuh kapak dari Tamo"));
       push("rock", world.rocks, REACH, (r) => !r.mined, "E  ambil batu");
       push("sand", world.sands, REACH, (s) => !s.taken, "E  ambil pasir");
       push("shell", world.shells, REACH, (s) => !s.taken, "E  ambil kerang");
@@ -345,6 +357,7 @@ export function createSim(world) {
           tr.fallDir = Math.sign(Math.sin(this.yaw)) || 1;
           tr.regrowDay = this.day + 2;
           tr.solid.r = 0;
+          if (world.invalidateHash) world.invalidateHash();
           this.inv.log += 1;
           this._chopped += 1;
           audio.sfx("fall");
@@ -470,6 +483,7 @@ export function createSim(world) {
       if (t.kind === "rock") {
         t.ref.mined = true;
         t.ref.solid.r = 0;
+        if (world.invalidateHash) world.invalidateHash();
         this.inv.stone += 1;
         this.toast = `Batu ${this.inv.stone}/${NEED.stone}`;
         audio.sfx("pickup");

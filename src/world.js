@@ -381,6 +381,47 @@ function catMesh(parent, cfg, x, z) {
   return g;
 }
 
+// Small speech bubble that pops above an NPC's head when the player walks up.
+function speechBubble(text) {
+  const cv = document.createElement("canvas");
+  cv.width = 256;
+  cv.height = 128;
+  const g2 = cv.getContext("2d");
+  const w = Math.min(238, 56 + text.length * 12);
+  const h = 62;
+  const x0 = (256 - w) / 2;
+  const y0 = 18;
+  const r = 18;
+  g2.fillStyle = "rgba(246,231,203,0.96)";
+  g2.beginPath();
+  g2.moveTo(x0 + r, y0);
+  g2.arcTo(x0 + w, y0, x0 + w, y0 + h, r);
+  g2.arcTo(x0 + w, y0 + h, x0, y0 + h, r);
+  g2.arcTo(x0, y0 + h, x0, y0, r);
+  g2.arcTo(x0, y0, x0 + w, y0, r);
+  g2.closePath();
+  g2.fill();
+  // tail
+  g2.beginPath();
+  g2.moveTo(128 - 11, y0 + h - 2);
+  g2.lineTo(128, y0 + h + 16);
+  g2.lineTo(128 + 11, y0 + h - 2);
+  g2.closePath();
+  g2.fill();
+  g2.font = "600 24px Nunito, Segoe UI, system-ui, sans-serif";
+  g2.textAlign = "center";
+  g2.textBaseline = "middle";
+  g2.fillStyle = "#2a2019";
+  g2.fillText(text, 128, y0 + h / 2 + 1);
+  const tex = new THREE.CanvasTexture(cv);
+  tex.anisotropy = 4;
+  const spr = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false, depthTest: false }));
+  spr.scale.set(1.5, 0.75, 1);
+  spr.renderOrder = 7;
+  spr.visible = false;
+  return spr;
+}
+
 function nameLabel(text, opts = {}) {
   const cv = document.createElement("canvas");
   cv.width = 256;
@@ -784,7 +825,14 @@ export function createWorld(scene) {
     const label = nameLabel(n.name);
     label.position.set(n.x, groundAt(n.x, n.z) + 1.35, n.z);
     root.add(label);
-    return { ...n, mesh: g, label, parts: g.userData, path: null, pi: 0, wait: Math.random() * 2, stuck: 0, lastX: n.x, lastZ: n.z, vy: 0 };
+    const bubble = speechBubble(n.id === "tamo" ? "Halo, pendatang." : "Altar dijaga, ya.");
+    bubble.position.set(n.x, groundAt(n.x, n.z) + 1.85, n.z);
+    root.add(bubble);
+    return {
+      ...n, mesh: g, label, bubble, parts: g.userData,
+      path: null, pi: 0, wait: Math.random() * 2, stuck: 0, lastX: n.x, lastZ: n.z,
+      vy: 0, y: groundAt(n.x, n.z), greet: 0, greetCool: 0, bubbleT: 0, sepX: 0, sepZ: 0,
+    };
   });
 
   const player = capsule(root, 0, -15.2, { shirt: 0x3f6b52, scarf: true, yaw: 0 });
@@ -801,7 +849,11 @@ export function createWorld(scene) {
     label.position.set(c.x, groundAt(c.x, c.z) + 0.9, c.z);
     label.visible = false;
     root.add(label);
-    return { ...c, name: cfg.name, mesh: g, label, state: "sit", t: Math.random() * 3, target: null, path: null, pi: 0, purr: 0, night: false };
+    return {
+      ...c, name: cfg.name, mesh: g, label, state: "sit", t: Math.random() * 3,
+      target: null, path: null, pi: 0, purr: 0, night: false,
+      y: groundAt(c.x, c.z), bubble: null, greetCool: 0,
+    };
   });
 
   const torch = new THREE.PointLight(0xffc98a, 0, 9, 2);
@@ -954,12 +1006,81 @@ export function createWorld(scene) {
     return true;
   }
 
-  function collides(x, z, r) {
+  // ---------- spatial hash for collider queries ----------
+  // Buckets solids and boxes into a 2-unit grid so a query only tests nearby
+  // candidates instead of every tree on the island.
+  const HASH = 2;
+  const hashCells = new Map();
+  const hkey = (i, j) => i * 73856093 ^ j * 19349663;
+  let hashDirty = true;
+
+  function hashInsert(obj, minX, maxX, minZ, maxZ) {
+    const i0 = Math.floor(minX / HASH), i1 = Math.floor(maxX / HASH);
+    const j0 = Math.floor(minZ / HASH), j1 = Math.floor(maxZ / HASH);
+    for (let i = i0; i <= i1; i++) {
+      for (let j = j0; j <= j1; j++) {
+        const k = hkey(i, j);
+        let list = hashCells.get(k);
+        if (!list) { list = []; hashCells.set(k, list); }
+        list.push(obj);
+      }
+    }
+  }
+
+  function rebuildHash() {
+    hashCells.clear();
     for (const s of solids) {
+      if (s.r <= 0) continue;
+      hashInsert(s, s.x - s.r, s.x + s.r, s.z - s.r, s.z + s.r);
+    }
+    for (const b of boxes) {
+      if (b.walls && simStage < 5) continue;
+      const pad = b.walls ? 0.4 : 0;
+      hashInsert(b, b.x - b.hw - pad, b.x + b.hw + pad, b.z - b.hd - pad, b.z + b.hd + pad);
+    }
+    hashDirty = false;
+  }
+
+  function hashQuery(x, z, r, out) {
+    if (hashDirty) rebuildHash();
+    out.length = 0;
+    const i0 = Math.floor((x - r) / HASH), i1 = Math.floor((x + r) / HASH);
+    const j0 = Math.floor((z - r) / HASH), j1 = Math.floor((z + r) / HASH);
+    for (let i = i0; i <= i1; i++) {
+      for (let j = j0; j <= j1; j++) {
+        const list = hashCells.get(hkey(i, j));
+        if (!list) continue;
+        for (const o of list) if (!out.includes(o)) out.push(o);
+      }
+    }
+    return out;
+  }
+  const _q = [];
+
+  // Nearest free spot for a body that ended up inside a collider.
+  function depenetrate(x, z, r) {
+    if (!collides(x, z, r)) return null;
+    for (let ring = 1; ring <= 6; ring++) {
+      const rad = ring * 0.16;
+      for (let a = 0; a < 12; a++) {
+        const ang = (a / 12) * Math.PI * 2 + ring * 0.3;
+        const px = x + Math.cos(ang) * rad;
+        const pz = z + Math.sin(ang) * rad;
+        if (!collides(px, pz, r)) return { x: px, z: pz };
+      }
+    }
+    return null;
+  }
+
+  function collides(x, z, r) {
+    const near = hashQuery(x, z, r + 1.2, _q);
+    for (const s of near) {
+      if (s.r === undefined) continue;
       if (s.r <= 0) continue;
       if (Math.hypot(s.x - x, s.z - z) < s.r + r) return true;
     }
-    for (const b of boxes) {
+    for (const b of near) {
+      if (b.r !== undefined) continue;
       if (b.walls) {
         // walls only exist once the framing stage has been built
         if (simStage < 5) continue;
@@ -983,6 +1104,10 @@ export function createWorld(scene) {
       if (Math.hypot(dx, dz) < r) return true;
     }
     return false;
+  }
+
+  function invalidateHash() {
+    hashDirty = true;
   }
 
   function setNav(n) {
@@ -1141,7 +1266,9 @@ export function createWorld(scene) {
   function sync(sim, dt = 0.016) {
     elapsed += dt;
     const t = elapsed;
+    const stageBefore = simStage;
     simStage = sim.houseStage || 0;
+    if (simStage !== stageBefore) invalidateHash();
     // keep the shadow frustum tight around the player so shadows stay sharp
     sunLight.position.set(sunBase.x + sim.x * 0.35, sunBase.y, sunBase.z + sim.z * 0.35);
     sunLight.target.position.set(sim.x * 0.35, 0, sim.z * 0.35);
@@ -1229,6 +1356,7 @@ export function createWorld(scene) {
           tr.felled = false;
           tr.regrowDay = 0;
           tr.solid.r = 0.5;
+          invalidateHash();
           tr.mesh.rotation.x = 0;
           tr.mesh.position.y = groundAt(tr.x, tr.z);
           tr.canopy.visible = true;
@@ -1321,20 +1449,46 @@ export function createWorld(scene) {
         n.wait = 1.5 + Math.random() * 3;
         n.path = null;
       }
-      // face player when near
+      // depenetration: if a stage popped up around the NPC, slide it out
+      const push = depenetrate(n.x, n.z, 0.3);
+      if (push) {
+        n.x += (push.x - n.x) * Math.min(1, dt * 5);
+        n.z += (push.z - n.z) * Math.min(1, dt * 5);
+        n.path = null;
+      }
+      // greet the player: turn, hop twice, show a bubble, cool down
       const d = Math.hypot(n.x - sim.x, n.z - sim.z);
-      if (d < 3.2 && !moving) {
+      n.greetCool = Math.max(0, n.greetCool - dt);
+      if (d < 3.0) {
         const look = Math.atan2(sim.x - n.x, sim.z - n.z);
         let dy = look - n.mesh.rotation.y;
         while (dy > Math.PI) dy -= Math.PI * 2;
         while (dy < -Math.PI) dy += Math.PI * 2;
         n.mesh.rotation.y += dy * Math.min(1, dt * 5);
+        if (d < 2.2 && n.greetCool <= 0 && n.greet <= 0) {
+          n.greet = 1.6;
+          n.greetCool = 14;
+          n.bubbleT = 2.6;
+          n.path = null; // pause the walk to say hello
+        }
       }
+      if (n.greet > 0) n.greet = Math.max(0, n.greet - dt);
+      const hop = n.greet > 0 ? Math.abs(Math.sin((1.6 - n.greet) * 9)) * 0.16 * Math.min(1, n.greet) : 0;
+      // damped ground follow so slopes never snap the mesh
       const gy = surface(n.x, n.z);
-      n.mesh.position.set(n.x, gy + (moving ? Math.abs(Math.sin(t * 9)) * 0.04 : 0), n.z);
+      n.y += (gy - n.y) * Math.min(1, dt * 9);
+      n.mesh.position.set(n.x, n.y + (moving ? Math.abs(Math.sin(t * 9)) * 0.04 : 0) + hop, n.z);
       animateCapsule(n.parts, { t, dt, moving, speed: 0.9, phase: n.x });
-      n.label.position.set(n.x, gy + 1.35, n.z);
+      n.label.position.set(n.x, n.y + 1.35, n.z);
       n.label.material.opacity = d < 10 ? 1 : 0.4;
+      // bubble
+      n.bubbleT = Math.max(0, n.bubbleT - dt);
+      n.bubble.visible = n.bubbleT > 0;
+      if (n.bubble.visible) {
+        n.bubble.position.set(n.x, n.y + 1.85 + hop, n.z);
+        const k = Math.min(1, (2.6 - n.bubbleT) * 6);
+        n.bubble.scale.set(1.5 * (0.7 + k * 0.3), 0.75 * (0.7 + k * 0.3), 1);
+      }
       if (n.mesh.rotation.y > Math.PI) n.mesh.rotation.y -= Math.PI * 2;
       if (n.mesh.rotation.y < -Math.PI) n.mesh.rotation.y += Math.PI * 2;
     }
@@ -1369,8 +1523,13 @@ export function createWorld(scene) {
           if (!cat.target || Math.hypot(cat.target.x - cat.x, cat.target.z - cat.z) < 0.35 || cat.t <= 0) {
             const a = Math.random() * Math.PI * 2;
             const r = 2 + Math.random() * 5;
-            const tx = Math.max(-12, Math.min(12, cat.x + Math.cos(a) * r));
-            const tz = Math.max(-12, Math.min(12, cat.z + Math.sin(a) * r));
+            let tx = Math.max(-12, Math.min(12, cat.x + Math.cos(a) * r));
+            let tz = Math.max(-12, Math.min(12, cat.z + Math.sin(a) * r));
+            // keep cats off the water and out of walls
+            if (surfaceAt(tx, tz) < 0.4 || collides(tx, tz, 0.18)) {
+              tx = cat.x;
+              tz = cat.z;
+            }
             cat.target = { x: tx, z: tz };
             cat.path = nav ? nav.path(cat.x, cat.z, tx, tz) : null;
             cat.pi = 0;
@@ -1392,15 +1551,26 @@ export function createWorld(scene) {
               cat.mesh.rotation.y += dy * Math.min(1, dt * 8);
             }
           }
-          cat.mesh.position.set(cat.x, surface(cat.x, cat.z) + Math.abs(Math.sin(t * 9 + cat.x)) * 0.035, cat.z);
-        } else {
-          cat.mesh.position.set(cat.x, surface(cat.x, cat.z), cat.z);
         }
         if (cat.t <= 0 && cat.state !== "petted") {
           cat.state = Math.random() < 0.35 ? "walk" : Math.random() < 0.5 ? "play" : "sit";
           cat.t = 3 + Math.random() * 5;
         }
       }
+      // depenetration + damped ground follow
+      const cpush = depenetrate(cat.x, cat.z, 0.17);
+      if (cpush) {
+        cat.x += (cpush.x - cat.x) * Math.min(1, dt * 5);
+        cat.z += (cpush.z - cat.z) * Math.min(1, dt * 5);
+        cat.path = null;
+      }
+      const cgy = surface(cat.x, cat.z);
+      cat.y += (cgy - cat.y) * Math.min(1, dt * 10);
+      const cMoving = cat.state === "walk" || cat.state === "play";
+      if (cat.state !== "sleep") {
+        cat.mesh.position.set(cat.x, cat.y + (cMoving ? Math.abs(Math.sin(t * 9 + cat.x)) * 0.035 : 0), cat.z);
+      }
+
       // tail follow-through
       for (let i = 0; i < u.tail.length; i++) {
         const seg = u.tail[i];
@@ -1413,7 +1583,7 @@ export function createWorld(scene) {
       // label
       const d = Math.hypot(cat.x - sim.x, cat.z - sim.z);
       cat.label.visible = d < 6 && sim.phase === "island";
-      cat.label.position.set(cat.x, surface(cat.x, cat.z) + 0.95, cat.z);
+      cat.label.position.set(cat.x, cat.y + 0.95, cat.z);
       // purr squash
       if (cat.purr > 0) {
         cat.purr = Math.max(0, cat.purr - dt);
@@ -1424,6 +1594,55 @@ export function createWorld(scene) {
         u.body.scale.y += (1 - u.body.scale.y) * Math.min(1, dt * 6);
         u.body.scale.z += (1 - u.body.scale.z) * Math.min(1, dt * 6);
       }
+    }
+
+    // ---------- actor separation ----------
+    // Runs on live positions after everyone has moved, so it can't be undone
+    // by a stale snapshot. Pairwise push; the player is pushed too.
+    const bodies = [
+      { x: sim.x, z: sim.z, r: 0.34, player: true },
+      ...npcs.map((n) => ({ ref: n, x: n.x, z: n.z, r: 0.30 })),
+      ...cats.map((c) => ({ ref: c, x: c.x, z: c.z, r: 0.17 })),
+    ];
+    for (let i = 0; i < bodies.length; i++) {
+      for (let k = i + 1; k < bodies.length; k++) {
+        const a = bodies[i];
+        const b = bodies[k];
+        let dx = b.x - a.x;
+        let dz = b.z - a.z;
+        let dist = Math.hypot(dx, dz);
+        const minD = a.r + b.r;
+        if (dist >= minD) continue;
+        if (dist < 0.0001) { dx = 0.01; dz = 0; dist = 0.01; }
+        const overlap = (minD - dist) * 0.5 + 0.005;
+        const nx = dx / dist;
+        const nz = dz / dist;
+        const aPlayer = !!a.player;
+        const bPlayer = !!b.player;
+        // share the push; a player-vs-NPC pair moves the player a bit less
+        const aw = aPlayer ? 0.6 : bPlayer ? 1 : 0.5;
+        const bw = 1 - aw;
+        const ax = a.x - nx * overlap * 2 * aw;
+        const az = a.z - nz * overlap * 2 * aw;
+        if (!collides(ax, az, a.r)) { a.x = ax; a.z = az; }
+        const bx = b.x + nx * overlap * 2 * bw;
+        const bz = b.z + nz * overlap * 2 * bw;
+        if (!collides(bx, bz, b.r)) { b.x = bx; b.z = bz; }
+      }
+    }
+    for (const body of bodies) {
+      if (body.player) { sim.x = body.x; sim.z = body.z; }
+      else if (body.ref) { body.ref.x = body.x; body.ref.z = body.z; }
+    }
+    // refresh meshes with the post-separation positions
+    player.position.x = sim.x;
+    player.position.z = sim.z;
+    player.position.y = surface(sim.x, sim.z);
+    for (const n of npcs) {
+      n.mesh.position.x = n.x;
+      n.mesh.position.z = n.z;
+      n.label.position.x = n.x;
+      n.label.position.z = n.z;
     }
 
     // ---------- voyage ----------
@@ -1511,7 +1730,7 @@ export function createWorld(scene) {
   const keep = [
     ...trees, ...rocks, ...sands, ...shells,
     builds.furnace, builds.house, builds.boat,
-    ...npcs.map((n) => n.mesh), ...npcs.map((n) => n.label),
+    ...npcs.map((n) => n.mesh), ...npcs.map((n) => n.label), ...npcs.map((n) => n.bubble),
     player, ...clouds, ...birds, ...foams, ...cats.map((c) => c.mesh), ...cats.map((c) => c.label),
     sunDisc, moonDisc, torch, ...(fire && fire.flame ? [fire.flame, fire.flame2] : []),
   ];
@@ -1549,6 +1768,9 @@ export function createWorld(scene) {
     setNav,
     cutCamera,
     toggleDebug,
+    hashQuery,
+    invalidateHash,
+    depenetrate,
     get night() {
       return nightK;
     },

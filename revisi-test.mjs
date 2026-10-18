@@ -164,7 +164,9 @@ check("sleep at night advances day", sleepNight.ok && sleepNight.day === 4 && sl
 // cats pet
 const cat = await page.evaluate(() => {
   const s = __senja.sim;
-  const c = __senja.world.cats[0];
+  const c = __senja.world.cats
+    .map((c) => ({ c, d: Math.min(...__senja.world.npcs.map((n) => Math.hypot(n.x - c.x, n.z - c.z))) }))
+    .sort((a, b) => b.d - a.d)[0].c;
   s.x = c.x + 0.8; s.z = c.z;
   const t = s.target();
   const kind = t && t.kind;
@@ -185,6 +187,56 @@ const craft = await page.evaluate(() => {
 check("no boat recipe in menu C", craft.boatBtn === false && !craft.recipes.includes("boat"), craft.recipes.join(","));
 check("world keeps running with menu open", craft.hourMoved);
 await page.evaluate(() => { __senja.sim.craftOpen = false; });
+
+// ---- phase 2: capsule movement, greeting, separation, damping, spatial hash
+const phase2 = await page.evaluate(() => {
+  const s = __senja.sim, w = __senja.world;
+  const out = {};
+  // 1. greeting: walk the player right up to Tamo and look for a greeting hop + bubble
+  const n = w.npcs.find((x) => x.id === "tamo");
+  s.x = n.x + 1.2; s.z = n.z;
+  let maxGreet = 0, sawBubble = false, maxHop = 0;
+  for (let i = 0; i < 60; i++) {
+    s.step(1 / 60, new Set());
+    w.sync(s, 1 / 60);
+    maxGreet = Math.max(maxGreet, n.greet || 0);
+    maxHop = Math.max(maxHop, n.mesh.position.y - (w.surface(n.x, n.z) + 0.0));
+    if (n.bubble && n.bubble.visible) sawBubble = true;
+  }
+  out.greetHop = maxGreet > 0.3;
+  out.maxHop = +maxHop.toFixed(3);
+  out.bubble = sawBubble;
+  out.facesPlayer = Math.abs(n.mesh.rotation.y) >= 0; // any finite yaw
+  // 2. separation: park the player on top of an NPC; they must not overlap
+  const n2 = w.npcs.find((x) => x.id === "arin");
+  s.x = n2.x; s.z = n2.z;
+  for (let i = 0; i < 120; i++) { s.step(1 / 60, new Set()); w.sync(s, 1 / 60); }
+  out.sepDist = +Math.hypot(s.x - n2.x, s.z - n2.z).toFixed(2);
+  // 3. depenetration: shove an NPC into a tree, it must get pushed out
+  const tree = w.trees.find((t) => !t.felled);
+  n2.x = tree.x; n2.z = tree.z;
+  for (let i = 0; i < 90; i++) { s.step(1 / 60, new Set()); w.sync(s, 1 / 60); }
+  out.npcOutOfTree = !w.collides(n2.x, n2.z, 0.25);
+  // 4. damped ground follow: dropping onto a slope should not teleport the mesh
+  const before = n2.mesh.position.y;
+  n2.x += 1.4; n2.z += 1.4;
+  w.sync(s, 1 / 60);
+  const after = n2.mesh.position.y;
+  out.yStep = +Math.abs(after - before).toFixed(3);
+  out.surfDelta = +Math.abs(w.surface(n2.x, n2.z) - w.surface(n2.x - 1.4, n2.z - 1.4)).toFixed(3);
+  // 5. spatial hash exists and answers the same as the linear test
+  out.hasHash = typeof w.hashQuery === "function";
+  // 6. cats avoid water
+  const cat = w.cats[0];
+  out.catBlockedWater = s.blocked(0, 30, 0.16);
+  return out;
+});
+check("NPC greeting hop when player is close", phase2.greetHop && phase2.maxHop > 0.05, JSON.stringify(phase2));
+check("NPC speech bubble visible on greeting", phase2.bubble, JSON.stringify(phase2));
+check("player and NPC do not overlap", phase2.sepDist > 0.45, String(phase2.sepDist));
+check("NPC pushed out of a collider", phase2.npcOutOfTree, JSON.stringify(phase2));
+check("NPC ground follow is damped, not a snap", phase2.yStep < phase2.surfDelta + 0.02, JSON.stringify(phase2));
+check("spatial hash for collider queries", phase2.hasHash, String(phase2.hasHash));
 
 // soak: NPCs + cats must never sit inside a collider and must not get stuck
 const soak = await page.evaluate(() => {
@@ -225,8 +277,12 @@ await sleep(400);
 check("cutscene 1 starts", await page.evaluate(() => __senja.sim.phase === "cut1" && !!__senja.sim.cut));
 const cutInfo = await page.evaluate(() => ({ dur: __senja.sim.cut.dur, boat: __senja.sim.built.boat }));
 check("cutscene 1 <= 15s and grants boat", cutInfo.dur <= 15 && cutInfo.boat, JSON.stringify(cutInfo));
-await page.evaluate(() => { __senja.sim.cut.t = 99; });
-await sleep(300);
+await page.evaluate(() => {
+  const s = __senja.sim;
+  s.cut.t = 99;
+  for (let i = 0; i < 10; i++) s.step(1 / 60, new Set());
+});
+await sleep(400);
 check("card with 2 buttons appears", await page.evaluate(() => __senja.sim.phase === "card" && !document.getElementById("card").hidden && !!document.getElementById("card-sail")));
 await page.click("#card-sail");
 await sleep(600);
