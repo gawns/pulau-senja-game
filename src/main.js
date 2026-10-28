@@ -121,11 +121,17 @@ addEventListener("keydown", (e) => {
   }
   if (sim.craftOpen && (e.code === "Enter" || e.code === "Space")) {
     e.preventDefault();
-    const r = sim.recipes()[craftSel];
+    const r = craftSelected();
     if (r) { sim.craft(r.id); paintCraft(); }
   }
-  if (sim.craftOpen && (e.code === "ArrowRight" || e.code === "KeyD")) { craftSel = (craftSel + 1) % Math.max(1, sim.recipes().length); paintCraft(); }
-  if (sim.craftOpen && (e.code === "ArrowLeft" || e.code === "KeyA")) { craftSel = (craftSel - 1 + sim.recipes().length) % Math.max(1, sim.recipes().length); paintCraft(); }
+  if (sim.craftOpen && (e.code === "ArrowRight" || e.code === "KeyD")) {
+    craftSel = (craftSel + 1) % Math.max(1, craftList().length);
+    paintCraft();
+  }
+  if (sim.craftOpen && (e.code === "ArrowLeft" || e.code === "KeyA")) {
+    craftSel = (craftSel - 1 + craftList().length) % Math.max(1, craftList().length);
+    paintCraft();
+  }
 });
 addEventListener("keyup", (e) => {
   keys.delete(e.code);
@@ -156,6 +162,10 @@ $("dialog-next").onclick = nextLine;
 // ---------- craft ----------
 let craftSel = 0;
 let craftTab = "Rumah";
+// the grid only shows the active tab, so selection must be resolved against the
+// filtered list — indexing recipes() directly would craft the wrong item
+const craftList = () => sim.recipes().filter((r) => r.tab === craftTab);
+const craftSelected = () => craftList()[craftSel];
 $("craft-close").onclick = () => {
   sim.craftOpen = false;
   audio.sfx("click");
@@ -167,7 +177,7 @@ $("craft-chip").onclick = () => {
   audio.sfx(sim.craftOpen ? "open" : "click");
 };
 $("craft-make").onclick = () => {
-  const r = sim.recipes()[craftSel];
+  const r = craftSelected();
   if (r) { sim.craft(r.id); paintCraft(); }
 };
 $("again").onclick = () => location.reload();
@@ -194,27 +204,34 @@ function paintCraft() {
     b.classList.toggle("on", b.dataset.tab === craftTab);
     b.setAttribute("aria-selected", b.dataset.tab === craftTab ? "true" : "false");
   }
-  const list = recs.filter((r) => r.tab === craftTab);
+  const list = craftList();
   if (craftSel >= list.length) craftSel = 0;
   const grid = $("craft-grid");
-  grid.innerHTML = "";
-  list.forEach((r, i) => {
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "recipe";
-    btn.dataset.recipe = r.id;
-    btn.classList.toggle("sel", i === craftSel);
-    btn.classList.toggle("dim", !sim.canCraft(r.id));
-    const cost = Object.entries(r.cost).map(([k, v]) => {
-      const have = sim.inv[k] || 0;
-      const names = { log: "🪵", plank: "🪚", sand: "⏳", stone: "🪨", shell: "🐚" };
-      return `<span class="${have >= v ? "ok" : "no"}">${names[k] || k} ${have}/${v}</span>`;
-    }).join(" ");
-    btn.innerHTML = `<span class="ricon">${r.icon}</span><b>${r.name}</b><small>${cost}</small>${r.forQuest ? '<em>Untuk quest</em>' : ""}`;
-    btn.onclick = () => { craftSel = i; paintCraft(); };
-    btn.ondblclick = () => { sim.craft(r.id); paintCraft(); };
-    grid.appendChild(btn);
-  });
+  // paintCraft() is called from the render loop; rebuilding the grid every frame
+  // would detach nodes under the cursor (and break clicks). Only re-render when
+  // the visible content actually changes.
+  const key = `${craftTab}|${craftSel}|${JSON.stringify(sim.inv)}|${sim.ended}`;
+  if (grid.dataset.k !== key) {
+    grid.dataset.k = key;
+    grid.innerHTML = "";
+    list.forEach((r, i) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "recipe";
+      btn.dataset.recipe = r.id;
+      btn.classList.toggle("sel", i === craftSel);
+      btn.classList.toggle("dim", !sim.canCraft(r.id));
+      const cost = Object.entries(r.cost).map(([k, v]) => {
+        const have = sim.inv[k] || 0;
+        const names = { log: "🪵", plank: "🪚", sand: "⏳", stone: "🪨", shell: "🐚" };
+        return `<span class="${have >= v ? "ok" : "no"}">${names[k] || k} ${have}/${v}</span>`;
+      }).join(" ");
+      btn.innerHTML = `<span class="ricon">${r.icon}</span><b>${r.name}</b><small>${cost}</small>${r.forQuest ? '<em>Untuk quest</em>' : ""}`;
+      btn.onclick = () => { craftSel = i; paintCraft(); };
+      btn.ondblclick = () => { sim.craft(r.id); paintCraft(); };
+      grid.appendChild(btn);
+    });
+  }
   const sel = list[craftSel];
   $("craft-desc").textContent = sel
     ? sim.canCraft(sel.id)

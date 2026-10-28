@@ -1,11 +1,9 @@
 // Smoke test revisi v2: boot, gerak, tabrakan, tebang, rumah, tidur, kucing, menu C, cutscene.
 import puppeteer from "puppeteer-core";
-import fs from "node:fs";
+import { OUT, ensureOut, launchOptions, pageUrl, sleep } from "./qa-config.mjs";
 
-const OUT = "C:/Users/USER/Downloads/pulau-senja/playtest";
-fs.mkdirSync(OUT, { recursive: true });
-const URL = process.env.SENJA_URL || "http://localhost:5173/";
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const URL = pageUrl();
+ensureOut();
 let fails = 0;
 const check = (n, ok, x = "") => {
   console.log(`${ok ? "PASS" : "FAIL"}  ${n}${x ? "  — " + x : ""}`);
@@ -27,12 +25,12 @@ async function step(page, seconds, keyList = []) {
   }, seconds, keyList);
 }
 
-const browser = await puppeteer.launch({
-  executablePath: "C:/Program Files/Google/Chrome/Application/chrome.exe",
-  headless: "new",
-  args: ["--no-sandbox", "--enable-unsafe-swiftshader", "--use-gl=angle", "--use-angle=swiftshader", "--autoplay-policy=no-user-gesture-required"],
-  defaultViewport: { width: 1280, height: 800 },
-});
+const browser = await puppeteer.launch(
+  launchOptions({
+    args: ["--no-sandbox", "--enable-unsafe-swiftshader", "--use-gl=angle", "--use-angle=swiftshader", "--autoplay-policy=no-user-gesture-required"],
+    defaultViewport: { width: 1280, height: 800 },
+  })
+);
 const page = await browser.newPage();
 const errors = [];
 page.on("pageerror", (e) => errors.push(e.message));
@@ -161,13 +159,25 @@ const sleepNight = await page.evaluate(() => {
 });
 check("sleep at night advances day", sleepNight.ok && sleepNight.day === 4 && sleepNight.hour === 6, JSON.stringify(sleepNight));
 
-// cats pet
+// cats pet: cats are only pettable while the player faces them (see sim.target),
+// so pick the cat with the most elbow room and turn towards it first.
 const cat = await page.evaluate(() => {
   const s = __senja.sim;
-  const c = __senja.world.cats
-    .map((c) => ({ c, d: Math.min(...__senja.world.npcs.map((n) => Math.hypot(n.x - c.x, n.z - c.z))) }))
-    .sort((a, b) => b.d - a.d)[0].c;
-  s.x = c.x + 0.8; s.z = c.z;
+  const w = __senja.world;
+  const clear = (c) => {
+    const list = [
+      ...w.npcs.map((n) => ({ x: n.x, z: n.z })),
+      ...w.trees.filter((t) => !t.felled),
+      ...w.rocks.filter((r) => !r.mined),
+      ...w.sands.filter((o) => !o.taken),
+      ...w.shells.filter((o) => !o.taken),
+    ];
+    return Math.min(...list.map((o) => Math.hypot(o.x - c.x, o.z - c.z)));
+  };
+  const c = w.cats.map((c) => ({ c, room: clear(c) })).sort((a, b) => b.room - a.room)[0].c;
+  s.x = c.x + 0.8;
+  s.z = c.z;
+  s.yaw = Math.atan2(c.x - s.x, c.z - s.z); // face the cat, or there is no prompt
   const t = s.target();
   const kind = t && t.kind;
   s.interact();
@@ -218,12 +228,14 @@ const phase2 = await page.evaluate(() => {
   for (let i = 0; i < 90; i++) { s.step(1 / 60, new Set()); w.sync(s, 1 / 60); }
   out.npcOutOfTree = !w.collides(n2.x, n2.z, 0.25);
   // 4. damped ground follow: dropping onto a slope should not teleport the mesh
-  const before = n2.mesh.position.y;
+  n2.greet = 0; // the greeting hop would pollute the mesh y we are measuring
+  n2.bubbleT = 0;
+  const before = n2.y;
   n2.x += 1.4; n2.z += 1.4;
   w.sync(s, 1 / 60);
-  const after = n2.mesh.position.y;
-  out.yStep = +Math.abs(after - before).toFixed(3);
-  out.surfDelta = +Math.abs(w.surface(n2.x, n2.z) - w.surface(n2.x - 1.4, n2.z - 1.4)).toFixed(3);
+  const after = n2.y;
+  out.yStep = +Math.abs(after - before).toFixed(4);
+  out.surfDelta = +Math.abs(w.surface(n2.x, n2.z) - w.surface(n2.x - 1.4, n2.z - 1.4)).toFixed(4);
   // 5. spatial hash exists and answers the same as the linear test
   out.hasHash = typeof w.hashQuery === "function";
   // 6. cats avoid water
@@ -285,7 +297,16 @@ await page.evaluate(() => {
 await sleep(400);
 check("card with 2 buttons appears", await page.evaluate(() => __senja.sim.phase === "card" && !document.getElementById("card").hidden && !!document.getElementById("card-sail")));
 await page.click("#card-sail");
-await sleep(600);
+// the card is rendered by the rAF loop, so poll instead of trusting one sleep
+for (let i = 0; i < 40; i++) {
+  const phase = await page.evaluate(() => __senja.sim.phase);
+  if (phase !== "card") break;
+  await page.evaluate(() => {
+    const b = document.getElementById("card-sail");
+    if (b) b.click();
+  });
+  await sleep(100);
+}
 check("sailing phase", await page.evaluate(() => __senja.sim.phase === "sail"));
 
 // shark

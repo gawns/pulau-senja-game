@@ -1,17 +1,14 @@
 import puppeteer from "puppeteer-core";
-import fs from "node:fs";
-const OUT = "C:/Users/USER/Downloads/pulau-senja/playtest";
-fs.mkdirSync(OUT, { recursive: true });
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const b = await puppeteer.launch({
-  executablePath: "C:/Program Files/Google/Chrome/Application/chrome.exe",
-  headless: "new",
-  args: ["--no-sandbox", "--enable-unsafe-swiftshader", "--use-gl=angle", "--use-angle=swiftshader"],
-  defaultViewport: { width: 1440, height: 900, deviceScaleFactor: 1 },
-});
+import { OUT, ensureOut, launchOptions, pageUrl, sleep } from "./qa-config.mjs";
+
+const URL = pageUrl();
+ensureOut();
+const b = await puppeteer.launch(
+  launchOptions({ defaultViewport: { width: 1440, height: 900, deviceScaleFactor: 1 } })
+);
 const page = await b.newPage();
 page.on("pageerror", (e) => console.log("ERR", e.message.slice(0, 160)));
-await page.goto("http://localhost:5173/?v=" + Date.now(), { waitUntil: "networkidle0" });
+await page.goto(URL + "?v=" + Date.now(), { waitUntil: "networkidle0" });
 await page.screenshot({ path: `${OUT}/v2-intro.png` });
 await page.click("#intro-go");
 await sleep(900);

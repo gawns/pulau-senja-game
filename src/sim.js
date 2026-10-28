@@ -161,7 +161,15 @@ export function createSim(world) {
         cands.push({ kind, ref: it, d, label: typeof label === "function" ? label(it) : label });
       };
       push("npc", world.npcs, TALK, null, (n) => `E  bicara ${n.name}`, -1.4);
-      push("cat", world.cats, 1.5, null, (c) => `E  usap ${c.name}`);
+      // cats are only pettable when you actually face them, so a cat sitting
+      // beside a tree can't steal the chop prompt
+      const facing = (it, min = 0.45) => {
+        const dx = it.x - this.x;
+        const dz = it.z - this.z;
+        const d = Math.hypot(dx, dz) || 0.001;
+        return (dx / d) * Math.sin(this.yaw) + (dz / d) * Math.cos(this.yaw) > min;
+      };
+      push("cat", world.cats, 1.5, (c) => facing(c), (c) => `E  usap ${c.name}`);
       if (this.quest === "boat" || this.quest === "sail") {
         push("boat", [world.boat], 2.8, null, this.quest === "boat" ? "E  temui Tamo" : "E  berlayar");
       }
@@ -609,6 +617,7 @@ export function createSim(world) {
       this.sharkT = (this.sharkT || 0) + dt;
       if (this.sharkT > 11.5) {
         this.phase = "patch";
+        this.quest = "patch";
         this.patchHold = 0;
         this.toast = "Dua lubang di lambung. Tahan E.";
       }

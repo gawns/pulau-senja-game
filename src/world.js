@@ -724,9 +724,9 @@ export function createWorld(scene) {
   // ---------- vegetation ----------
   const trees = [];
   const treeSpots = [
-    [-3.2, -8.4], [-6.4, -6.2], [-8.2, -2.6], [-9.4, 3.4], [-6.8, 6.2],
-    [-2.4, 8.4], [1.8, 9.2], [5.4, 8.6], [8.8, 4.4], [10.2, -1.2],
-    [6.2, -6.4], [2.2, -9.6], [-10.6, 0.2], [-1.2, 2.4], [12.2, 2.6], [-11.8, -1.4],
+    [-3.2, -8.4], [-6.4, -6.2], [-8.2, -2.6], [-12.0, 6.2], [-6.8, 6.2],
+    [-2.4, 8.4], [1.8, 9.2], [5.4, 8.6], [12.4, -2.6], [10.2, -1.2],
+    [6.2, -6.4], [2.2, -9.6], [-11.4, 3.2], [-1.2, 2.4], [12.2, 2.6], [-11.8, -1.4],
   ];
   for (const [x, z] of treeSpots) {
     const s = 0.9 + ((x * 7 + z * 3) % 5) * 0.06;
@@ -968,6 +968,7 @@ export function createWorld(scene) {
   }
 
   let simStage = 0;
+  let playerRef = null;
   let lastNight = false;
 
   function moveActor(a, dt, speed, radius) {
@@ -984,7 +985,12 @@ export function createWorld(scene) {
     const vz = (dz / d) * speed;
     const nx = a.x + vx * dt;
     const nz = a.z + vz * dt;
-    const ok = (x, z) => (nav ? !nav.gridBlocked?.(x, z) : true) && !collides(x, z, radius);
+    const ok = (x, z) => {
+      if (collides(x, z, radius)) return false;
+      // don't walk through the player
+      if (playerRef && Math.hypot(x - playerRef.x, z - playerRef.z) < radius + 0.34) return false;
+      return true;
+    };
     if (ok(nx, a.z)) a.x = nx;
     if (ok(a.x, nz)) a.z = nz;
     // stuck detection
@@ -1269,6 +1275,7 @@ export function createWorld(scene) {
     const stageBefore = simStage;
     simStage = sim.houseStage || 0;
     if (simStage !== stageBefore) invalidateHash();
+    playerRef = sim;
     // keep the shadow frustum tight around the player so shadows stay sharp
     sunLight.position.set(sunBase.x + sim.x * 0.35, sunBase.y, sunBase.z + sim.z * 0.35);
     sunLight.target.position.set(sim.x * 0.35, 0, sim.z * 0.35);
@@ -1622,6 +1629,8 @@ export function createWorld(scene) {
         // share the push; a player-vs-NPC pair moves the player a bit less
         const aw = aPlayer ? 0.6 : bPlayer ? 1 : 0.5;
         const bw = 1 - aw;
+        // a chopping player is planted: NPCs walk around, they never shove
+        if ((aPlayer || bPlayer) && sim.chop) continue;
         const ax = a.x - nx * overlap * 2 * aw;
         const az = a.z - nz * overlap * 2 * aw;
         if (!collides(ax, az, a.r)) { a.x = ax; a.z = az; }

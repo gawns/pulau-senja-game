@@ -1,18 +1,16 @@
 // Reachability + night visibility audit
 import puppeteer from "puppeteer-core";
 import fs from "node:fs";
+import { OUT, ensureOut, launchOptions, pageUrl } from "./qa-config.mjs";
 
-const OUT = "C:/Users/USER/Downloads/pulau-senja/playtest";
-fs.mkdirSync(OUT, { recursive: true });
-const browser = await puppeteer.launch({
-  executablePath: "C:/Program Files/Google/Chrome/Application/chrome.exe",
-  headless: "new",
-  args: ["--no-sandbox", "--enable-unsafe-swiftshader", "--use-gl=angle", "--use-angle=swiftshader"],
-  defaultViewport: { width: 1100, height: 720 },
-});
+const URL = pageUrl("?lowfx=1");
+ensureOut();
+const browser = await puppeteer.launch(
+  launchOptions({ defaultViewport: { width: 1100, height: 720 } })
+);
 const page = await browser.newPage();
 page.on("pageerror", (e) => console.log("PAGEERROR", e.message));
-await page.goto("http://localhost:5173/?lowfx=1", { waitUntil: "networkidle0" });
+await page.goto(URL, { waitUntil: "networkidle0" });
 await page.click("#intro-go");
 await new Promise((r) => setTimeout(r, 500));
 

@@ -1,15 +1,14 @@
 import puppeteer from "puppeteer-core";
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const OUT = "C:/Users/USER/Downloads/pulau-senja/playtest";
-const b = await puppeteer.launch({
-  executablePath: "C:/Program Files/Google/Chrome/Application/chrome.exe",
-  headless: "new",
-  args: ["--no-sandbox", "--enable-unsafe-swiftshader", "--use-gl=angle", "--use-angle=swiftshader"],
-  defaultViewport: { width: 900, height: 700 },
-});
+import { OUT, ensureOut, launchOptions, pageUrl, sleep } from "./qa-config.mjs";
+
+const URL = pageUrl();
+ensureOut();
+const b = await puppeteer.launch(
+  launchOptions({ defaultViewport: { width: 900, height: 700 } })
+);
 const page = await b.newPage();
 page.on("pageerror", (e) => console.log("ERR", e.message.slice(0,240)));
-await page.goto("http://localhost:5173/?v=" + Date.now(), { waitUntil: "networkidle0" });
+await page.goto(URL + "?v=" + Date.now(), { waitUntil: "networkidle0" });
 await page.click("#intro-go");
 await sleep(900);
 const info = await page.evaluate(() => {

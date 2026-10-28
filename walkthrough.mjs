@@ -1,24 +1,22 @@
 // End-to-end walkthrough using ONLY real keyboard input (no teleporting).
 // Quest chain v2: Tamo -> 10 kayu -> rumah 8 kayu -> tidur -> perahu Tamo -> berlayar.
 import puppeteer from "puppeteer-core";
-import fs from "node:fs";
+import { OUT, ensureOut, launchOptions, pageUrl, sleep } from "./qa-config.mjs";
 
-const OUT = "C:/Users/USER/Downloads/pulau-senja/playtest";
-fs.mkdirSync(OUT, { recursive: true });
-const URL = process.env.SENJA_URL || "http://localhost:5173/?lowfx=1";
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const URL = pageUrl("?lowfx=1");
+ensureOut();
 let fails = 0;
 const check = (n, ok, x = "") => {
   console.log(`${ok ? "PASS" : "FAIL"}  ${n}${x ? "  — " + x : ""}`);
   if (!ok) fails++;
 };
 
-const browser = await puppeteer.launch({
-  executablePath: "C:/Program Files/Google/Chrome/Application/chrome.exe",
-  headless: "new",
-  args: ["--no-sandbox", "--enable-unsafe-swiftshader", "--use-gl=angle", "--use-angle=swiftshader", "--autoplay-policy=no-user-gesture-required"],
-  defaultViewport: { width: 1280, height: 800 },
-});
+const browser = await puppeteer.launch(
+  launchOptions({
+    args: [...["--no-sandbox", "--enable-unsafe-swiftshader", "--use-gl=angle", "--use-angle=swiftshader"], "--autoplay-policy=no-user-gesture-required"],
+    defaultViewport: { width: 1280, height: 800 },
+  })
+);
 const page = await browser.newPage();
 const errors = [];
 page.on("pageerror", (e) => errors.push(e.message));
@@ -199,9 +197,14 @@ async function chopTree(t) {
     if (/tebang/i.test(label)) { ok = true; break; }
   }
   if (!ok) return false;
+  // real key presses, but advance the sim deterministically so a slow software
+  // renderer can't stretch a 0.6s swing past the next press
   for (let i = 0; i < 3; i++) {
     await page.keyboard.press("e");
-    await sleep(1100);
+    await page.evaluate(() => {
+      const s = __senja.sim;
+      for (let k = 0; k < 50; k++) s.step(1 / 60, new Set());
+    });
   }
   return page.evaluate((tx, tz) => {
     const tr = __senja.world.trees.find((x) => Math.abs(x.x - tx) < 0.01 && Math.abs(x.z - tz) < 0.01);
@@ -285,25 +288,50 @@ for (let attempt = 0; attempt < 10; attempt++) {
       .sort((a, b) => b.d - a.d);
     return list[0];
   });
-  const a = attempt * 1.3;
-  const okPath = await pathTo(cat.x + Math.cos(a) * 1.05, cat.z + Math.sin(a) * 1.05);
+  // choose the approach angle with the most clearance from trees/rocks, so the
+  // cat is unambiguously the nearest interactable
+  const spot = await page.evaluate(() => {
+    const s = __senja.sim;
+    const c = __senja.world.cats
+      .map((c) => ({ c, d: Math.hypot(c.x - s.x, c.z - s.z) }))
+      .sort((a, b) => a.d - b.d)[0].c;
+    const others = [...__senja.world.trees.filter((t) => !t.felled), ...__senja.world.rocks.filter((r) => !r.mined)];
+    let best = null, bestScore = -1;
+    for (let i = 0; i < 24; i++) {
+      const ang = (i / 24) * Math.PI * 2;
+      const x = c.x + Math.cos(ang) * 0.95;
+      const z = c.z + Math.sin(ang) * 0.95;
+      if (s.blocked(x, z)) continue;
+      let clearance = 99;
+      for (const o of others) clearance = Math.min(clearance, Math.hypot(o.x - x, o.z - z));
+      if (clearance > bestScore) { bestScore = clearance; best = { x, z }; }
+    }
+    return best;
+  });
+  if (!spot) continue;
+  const okPath = await pathTo(spot.x, spot.z);
   await sleep(250);
   const info = await page.evaluate(() => ({
     label: document.getElementById("prompt").textContent || "",
     x: +__senja.sim.x.toFixed(2),
     z: +__senja.sim.z.toFixed(2),
   }));
+  // cats wander and are only pettable when faced: face the nearest cat, and if
+  // it drifted out of reach, step to it and face it again
   let label = info.label;
-  if (!/usap/i.test(label)) {
-    // cats wander: re-read the live position, then face it and re-check
-    await page.evaluate(() => {
+  for (let k = 0; k < 3 && !/usap/i.test(label); k++) {
+    const catNow = await page.evaluate(() => {
       const s = __senja.sim;
       const c = __senja.world.cats
-        .map((c) => ({ c, d: Math.hypot(c.x - s.x, c.z - s.z) }))
-        .sort((a, b) => a.d - b.d)[0].c;
+        .map((c) => ({ x: c.x, z: c.z, d: Math.hypot(c.x - s.x, c.z - s.z) }))
+        .sort((a, b) => a.d - b.d)[0];
       s.yaw = Math.atan2(c.x - s.x, c.z - s.z);
+      return c;
     });
-    await sleep(150);
+    if (catNow.d > 1.35) {
+      await pathTo(catNow.x + 0.85, catNow.z);
+    }
+    await sleep(160);
     label = await page.evaluate(() => document.getElementById("prompt").textContent || "");
   }
   if (!/usap/i.test(label)) {
@@ -320,18 +348,33 @@ check("E pets a cat", s.catsPet >= 1, JSON.stringify({ catsPet: s.catsPet }));
 // ---- 3. house: walk to the plot, press E eight times
 const plot = await page.evaluate(() => ({ x: __senja.world.housePos.x, z: __senja.world.housePos.z }));
 await pathTo(plot.x, plot.z + 3.0);
-let placed = 0;
-for (let guard = 0; guard < 24 && placed < 8; guard++) {
-  const st0 = await page.evaluate(() => ({ stage: __senja.sim.houseStage, q: __senja.sim.houseQueue.length, label: document.getElementById("prompt").textContent || "" }));
-  if (st0.stage + st0.q >= 8) break;
+// keep pressing E until the stage counter really reaches 8 (a press can be
+// dropped if the plot prompt is briefly outranked by a nearby object)
+for (let guard = 0; guard < 40; guard++) {
+  const st0 = await page.evaluate(() => ({
+    stage: __senja.sim.houseStage,
+    q: __senja.sim.houseQueue.length,
+    log: __senja.sim.inv.log,
+    label: document.getElementById("prompt").textContent || "",
+  }));
+  if (st0.stage >= 8) break;
+  if (st0.stage + st0.q >= 8) { await sleep(400); continue; }
+  if (st0.log <= 0) break;
   if (!/kayu/i.test(st0.label)) {
-    await pathTo(plot.x, plot.z + 3.0);
-    await sleep(250);
-    continue;
+    await page.evaluate(() => {
+      const s = __senja.sim;
+      s.yaw = Math.atan2(__senja.world.housePos.x - s.x, __senja.world.housePos.z - s.z);
+    });
+    await sleep(150);
+    const again = await page.evaluate(() => document.getElementById("prompt").textContent || "");
+    if (!/kayu/i.test(again)) {
+      await pathTo(plot.x, plot.z + 3.0);
+      await sleep(250);
+      continue;
+    }
   }
   await page.keyboard.press("e");
-  await sleep(500);
-  placed++;
+  await sleep(350);
 }
 // stages are queued 1.2s apart; wait for the queue to drain
 await page.waitForFunction(() => __senja.sim.houseStage === 8 && __senja.sim.houseAnim === 0, { timeout: 15000 }).catch(() => {});
@@ -405,8 +448,14 @@ await page.evaluate(() => { __senja.sim.sharkT = 12; });
 await sleep(400);
 check("shark attack -> patch phase", await page.evaluate(() => __senja.sim.phase === "patch"));
 for (let k = 0; k < 2; k++) {
+  // hold E, then advance the sim deterministically: the 1.2s hold must not be
+  // stretched by a slow software renderer
   await page.keyboard.down("e");
-  await sleep(2800);
+  await sleep(120);
+  await page.evaluate(() => {
+    const s = __senja.sim;
+    for (let i = 0; i < 110 && s.patches.filter(Boolean).length <= 1; i++) s.step(1 / 60, new Set());
+  });
   await page.keyboard.up("e");
   await sleep(200);
 }
